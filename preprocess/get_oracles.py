@@ -1,3 +1,6 @@
+import json
+from compare_mt.rouge.rouge_scorer import RougeScorer
+import numpy as np
 import os
 import argparse
 from os.path import join, exists
@@ -19,10 +22,19 @@ from transformers import BertTokenizer, RobertaTokenizer
 
 MAX_LEN = 512
 
-_ROUGE_PATH = '~/pyrouge/tools/ROUGE-1.5.5'
+_ROUGE_PATH = '/home/henry/rouge/pyrouge/tools/ROUGE-1.5.5'
 temp_path = './temp' # path to store some temporary files
 
 original_data, sent_ids = [], []
+
+scorer = RougeScorer(['rouge1'])
+scorer_2 = RougeScorer(['rouge1', 'rouge2', 'rougeLsum'])
+
+def get_idx(text, summary):
+    summary = " ".join(summary)
+    scores = [scorer.score(summary, s)['rouge1'].fmeasure for s in text]
+    idxs = np.argsort(scores)[-5:].tolist()
+    return idxs
 
 def load_jsonl(data_path):
     data = []
@@ -31,38 +43,45 @@ def load_jsonl(data_path):
             data.append(json.loads(line))
     return data
 
-def get_rouge(path, dec):
-    log.get_global_console_logger().setLevel(logging.WARNING)
-    dec_pattern = '(\d+).dec'
-    ref_pattern = '#ID#.ref'
-    dec_dir = join(path, 'decode')
-    ref_dir = join(path, 'reference')
+# def get_rouge(path, dec):
+#     log.get_global_console_logger().setLevel(logging.WARNING)
+#     dec_pattern = '(\d+).dec'
+#     ref_pattern = '#ID#.ref'
+#     dec_dir = join(path, 'decode')
+#     ref_dir = join(path, 'reference')
 
-    with open(join(dec_dir, '0.dec'), 'w') as f:
-        for sentence in dec:
-            print(sentence, file=f)
+#     with open(join(dec_dir, '0.dec'), 'w') as f:
+#         for sentence in dec:
+#             print(sentence, file=f)
 
-    cmd = '-c 95 -r 1000 -n 2 -m'
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        Rouge155.convert_summaries_to_rouge_format(
-            dec_dir, join(tmp_dir, 'dec'))
-        Rouge155.convert_summaries_to_rouge_format(
-            ref_dir, join(tmp_dir, 'ref'))
-        Rouge155.write_config_static(
-            join(tmp_dir, 'dec'), dec_pattern,
-            join(tmp_dir, 'ref'), ref_pattern,
-            join(tmp_dir, 'settings.xml'), system_id=1
-        )
-        cmd = (join(_ROUGE_PATH, 'ROUGE-1.5.5.pl')
-            + ' -e {} '.format(join(_ROUGE_PATH, 'data'))
-            + cmd
-            + ' -a {}'.format(join(tmp_dir, 'settings.xml')))
-        output = sp.check_output(cmd.split(' '), universal_newlines=True)
+#     cmd = '-c 95 -r 1000 -n 2 -m'
+#     with tempfile.TemporaryDirectory() as tmp_dir:
+#         Rouge155.convert_summaries_to_rouge_format(
+#             dec_dir, join(tmp_dir, 'dec'))
+#         Rouge155.convert_summaries_to_rouge_format(
+#             ref_dir, join(tmp_dir, 'ref'))
+#         Rouge155.write_config_static(
+#             join(tmp_dir, 'dec'), dec_pattern,
+#             join(tmp_dir, 'ref'), ref_pattern,
+#             join(tmp_dir, 'settings.xml'), system_id=1
+#         )
+#         cmd = (join(_ROUGE_PATH, 'ROUGE-1.5.5.pl')
+#             + ' -e {} '.format(join(_ROUGE_PATH, 'data'))
+#             + cmd
+#             + ' -a {}'.format(join(tmp_dir, 'settings.xml')))
+#         output = sp.check_output(cmd.split(' '), universal_newlines=True)
 
-        line = output.split('\n')
-        rouge1 = float(line[3].split(' ')[3])
-        rouge2 = float(line[7].split(' ')[3])
-        rougel = float(line[11].split(' ')[3])
+#         line = output.split('\n')
+#         rouge1 = float(line[3].split(' ')[3])
+#         rouge2 = float(line[7].split(' ')[3])
+#         rougel = float(line[11].split(' ')[3])
+#     return (rouge1 + rouge2 + rougel) / 3
+
+def get_rouge(candidate, summary):
+    score = scorer_2.score("\n".join(summary), "\n".join(candidate))
+    rouge1 = score["rouge1"].fmeasure
+    rouge2 = score["rouge2"].fmeasure
+    rougel = score["rougeLsum"].fmeasure
     return (rouge1 + rouge2 + rougel) / 3
 
 @curry
@@ -71,9 +90,9 @@ def get_candidates(tokenizer, cls, sep_id, idx):
     idx_path = join(temp_path, str(idx))
     
     # create some temporary files to calculate ROUGE
-    sp.call('mkdir ' + idx_path, shell=True)
-    sp.call('mkdir ' + join(idx_path, 'decode'), shell=True)
-    sp.call('mkdir ' + join(idx_path, 'reference'), shell=True)
+    # sp.call('mkdir ' + idx_path, shell=True)
+    # sp.call('mkdir ' + join(idx_path, 'decode'), shell=True)
+    # sp.call('mkdir ' + join(idx_path, 'reference'), shell=True)
     
     # load data
     data = {}
@@ -81,16 +100,18 @@ def get_candidates(tokenizer, cls, sep_id, idx):
     data['summary'] = original_data[idx]['summary']
     
     # write reference summary to temporary files
-    ref_dir = join(idx_path, 'reference')
-    with open(join(ref_dir, '0.ref'), 'w') as f:
-        for sentence in data['summary']:
-            print(sentence, file=f)
+    # ref_dir = join(idx_path, 'reference')
+    # with open(join(ref_dir, '0.ref'), 'w') as f:
+    #     for sentence in data['summary']:
+    #         print(sentence, file=f)
 
     # get candidate summaries
     # here is for CNN/DM: truncate each document into the 5 most important sentences (using BertExt), 
     # then select any 2 or 3 sentences to form a candidate summary, so there are C(5,2)+C(5,3)=20 candidate summaries.
     # if you want to process other datasets, you may need to adjust these numbers according to specific situation.
-    sent_id = sent_ids[idx]['sent_id'][:5]
+    # sent_id = sent_ids[idx]['sent_id'][:5]
+    # sent_id = get_idx(data['text'], data['summary'])
+    sent_id = original_data[idx]["ext_idx"]
     indices = list(combinations(sent_id, 2))
     indices += list(combinations(sent_id, 3))
     if len(sent_id) < 2:
@@ -106,7 +127,7 @@ def get_candidates(tokenizer, cls, sep_id, idx):
         for j in i:
             sent = data['text'][j]
             dec.append(sent)
-        score.append((i, get_rouge(idx_path, dec)))
+        score.append((i, get_rouge(dec, data["summary"])))
     score.sort(key=lambda x : x[1], reverse=True)
     
     # write candidate indices and score
@@ -158,7 +179,7 @@ def get_candidates(tokenizer, cls, sep_id, idx):
     with open(join(processed_path, '{}.json'.format(idx)), 'w') as f:
         json.dump(data, f, indent=4) 
     
-    sp.call('rm -r ' + idx_path, shell=True)
+    # sp.call('rm -r ' + idx_path, shell=True)
 
 def get_candidates_mp(args):
     
@@ -172,11 +193,12 @@ def get_candidates_mp(args):
     sep_id = tokenizer.encode(sep, add_special_tokens=False)
 
     # load original data and indices
-    global original_data, sent_ids
+    # global original_data, sent_ids
+    global original_data
     original_data = load_jsonl(args.data_path)
-    sent_ids = load_jsonl(args.index_path)
+    # sent_ids = load_jsonl(args.index_path)
     n_files = len(original_data)
-    assert len(sent_ids) == len(original_data)
+    # assert len(sent_ids) == len(original_data)
     print('total {} documents'.format(n_files))
     os.makedirs(temp_path)
     processed_path = join(temp_path, 'processed')
@@ -218,6 +240,11 @@ if __name__ == '__main__':
     args = parser.parse_args()
     assert args.tokenizer in ['bert', 'roberta']
     assert exists(args.data_path)
-    assert exists(args.index_path)
+    # assert exists(args.index_path)
 
     get_candidates_mp(args)
+
+
+
+
+            
